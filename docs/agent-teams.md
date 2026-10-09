@@ -30,3 +30,51 @@ managerはタスクを分割し、他エージェントの生産性が発揮で�
 Agentの出力を統合するときには、要件・設計と照らし合わせて問題ないか。開発した資産の品質が良いかどうかを判断しつつ開発結果を報告する
 
 
+
+
+## 実際に使った構成（C-後半・2026-10-09）
+詳細な経過は docs/tasklog.md の STEP9・STEP10 を参照。
+
+| 設計書の Agent | 実際の担当 | 担当範囲 | 主な成果物 |
+|----------------|------------|----------|------------|
+| manager-architect | メインセッション（Claude Code 本体） | 基本設計・タスク分割・各 Agent への指示・差分レビュー・指摘への判断・統合と最終確認 | 基本設計（tasklog STEP9）、統合後の動作確認 |
+| backend-architect | backend-architect サブエージェント | src/ | GET /api/products/alerts・GET /api/products/export、src/utils/csv.js、429 / 503 のエラー対応 |
+| frontend-architect | frontend-developer サブエージェント | public/ | index.html の「在庫アラート」カード・「CSV出力」ボタン、api.js の apiDownload |
+| test-architect | general-purpose サブエージェント | \_\_tests\_\_/ | csv・alerts/export・api.js・index.js のテスト（STEP10 で form.js・login.js・format.js も追加） |
+| security-architect | security-auditor サブエージェント（読み取り専用） | 全成果物のレビューのみ | 指摘 S9-01〜S9-09（Critical / High なし）。修正は backend / frontend に依頼 |
+
+### 実際の進め方（依存関係）
+```
+manager（基本設計：アラート API・CSV 出力・画面）
+  └→ backend（API 実装）
+       ├→ frontend（画面実装）            ┐ 並列
+       └→ test（バックエンドのテスト先行）┘
+            └→ test（フロントエンドのテスト） ┐ 並列
+               security（レビュー）           ┘
+                 └→ backend / frontend（指摘の修正。並列）
+                      └→ test（期待値の更新・追加テスト）
+                           └→ manager（統合・最終確認）
+```
+- 各 Agent の完了ごとに manager が差分をレビューしてから次の Agent に渡した
+- security の指摘は manager が「今回直す／持ち越す」を判断してから修正を依頼した（S9-01・02・03・04・05・07・08 は修正、ストリーミング出力・レート制限・S9-06・S9-09 は持ち越し）
+
+### 結果
+- npm run test:coverage：18スイート・504件 → 22スイート・704件（STEP9 完了時）→ 25スイート・821件（STEP10 完了時）、すべて成功
+- 全体カバレッジ（Stmts）：72.54%（着手前）→ 84.75%（STEP9）→ 98.05%（STEP10）
+- 追加・変更したファイルは tasklog STEP9 の「変更ファイル」を参照
+
+## 気づき
+- 設計書との違い
+  - security-architect の担当タスクに「追加機能のバックエンド部分だけ実装」とあったが、backend の記述の写し間違いと判断し、レビューのみの役割とした（security-auditor は Bash・Write を持たない読み取り専用のエージェント）
+  - manager はサブエージェントにせずメインセッションが担当した。サブエージェントからさらにサブエージェントを起動できないため、指示・統合はメインセッションで行う必要がある
+  - 設計書の依存関係「backend ＆ frontend」は同時着手ではなく backend 完了後に frontend を開始した（frontend は API の応答形式に依存するため）。代わりに test のバックエンド分を frontend と並列にした
+- うまくいった点
+  - 基本設計（API の応答形式・CSV の列・画面の配置）を manager が先に文章で固めてから渡したため、backend と frontend の成果物の食い違いがなかった
+  - 実装担当とレビュー担当を分けたことで、CSV インジェクションの全角記号・同時実行によるメモリ枯渇など、実装時に見落とした観点が見つかった
+  - test 担当が仕様の疑問（JAN コードの Excel 表示、正当な値への ' 付与など）を質問として上げ、manager が判断して記録できた
+- 改善点
+  - test と backend / frontend の修正を並列にしたため、テスト担当の作業中に実装が変わり、期待値を2回合わせ直した。修正ラウンドは「修正完了 → テスト」の順にするほうが手戻りが少ない
+  - サブエージェントの報告をそのまま信じない。backend が「statement_timeout は未設定」と報告したが実際は pool.js で設定済みだった。manager がコードで裏取りしてから判断する
+  - STEP7 で API をすべて認証必須にしていたため、完了確認の例（トークンなしの curl）では 401 になった。共通方針を決めるときは完了確認の手順への影響も確認する
+  - STEP9 では form.js・login.js をテスト対象外にしたため、STEP10 で追加したテストで login.js のオープンリダイレクトの不具合が見つかった。追加機能の範囲外でも、カバレッジ 0% のファイルはテスト担当の対象に含めるほうがよい
+  - 動作確認用サーバを pkill -f で止めた際、パターンが自分のシェルにも一致してシェルが落ちた。起動した PID を控えて kill する
