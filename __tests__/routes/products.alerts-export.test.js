@@ -74,11 +74,15 @@ function rawText(res, callback) {
 }
 
 // 条件を満たすまで待つ（並行リクエストが pool.query に到達するのを待つ）
-async function waitFor(condition, { tries = 200 } = {}) {
-  for (let i = 0; i < tries; i += 1) {
+// リクエストは実際の HTTP 通信を挟むため、回数ではなく時間で待つ
+// （回数で待つと、GitHub Actions など遅いマシンでは到達前に打ち切られてしまう）
+async function waitFor(condition, { timeoutMs = 5000, intervalMs = 5 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     if (condition()) return;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
+  if (condition()) return;
   throw new Error('条件を満たしませんでした');
 }
 
@@ -98,7 +102,14 @@ async function startPendingExports(count) {
   const pendings = Array.from({ length: count }, () => deferred());
   pendings.forEach((d) => pool.query.mockImplementationOnce(() => d.promise));
   const responses = pendings.map(() => request(app).get('/api/products/export').then((res) => res));
-  await waitFor(() => pool.query.mock.calls.length === count);
+  try {
+    await waitFor(() => pool.query.mock.calls.length === count);
+  } catch (err) {
+    // 待ちきれなかった場合も応答待ちのリクエストを完了させる（残ると同時実行数を占有し、後続のテストまで 429 になる）
+    pendings.forEach((d) => d.resolve({ rows: [] }));
+    await Promise.allSettled(responses);
+    throw err;
+  }
   return { pendings, responses };
 }
 
