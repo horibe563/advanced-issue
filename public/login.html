@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ログイン | 在庫管理</title>
+  <link rel="stylesheet" href="/style.css">
+  <!-- helmet の CSP（script-src 'self'）に合わせ、スクリプトは外部ファイルのみ読み込む -->
+  <script type="module" src="/js/login.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <p class="site-title">在庫管理</p>
+  </header>
+
+  <main class="container login-container">
+    <h1>ログイン</h1>
+
+    <!-- エラーの表示領域 -->
+    <div id="page-message" class="message" hidden></div>
+
+    <section class="card" aria-label="ログイン">
+      <form id="login-form" novalidate>
+        <div class="field">
+          <label for="login-user-id">ユーザID</label>
+          <input type="text" id="login-user-id" name="user_id" maxlength="50" autocomplete="username" autofocus required>
+          <div class="field-error" data-error-for="user_id" hidden></div>
+        </div>
+        <div class="field">
+          <label for="login-password">パスワード</label>
+          <input type="password" id="login-password" name="password" autocomplete="current-password" required>
+          <div class="field-error" data-error-for="password" hidden></div>
+        </div>
+        <div class="actions">
+          <button type="submit" id="login-button" class="btn btn-primary">ログイン</button>
+        </div>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

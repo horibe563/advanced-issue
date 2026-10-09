@@ -1,0 +1,73 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: コードをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: EC2 へ SSH デプロイ
+        env:
+          EC2_KEY:      ${{ secrets.EC2_KEY }}
+          EC2_HOST:     ${{ secrets.EC2_HOST }}
+          EC2_USER:     ${{ secrets.EC2_USER }}
+          DB_HOST:      ${{ secrets.DB_HOST }}
+          DB_PORT:      ${{ secrets.DB_PORT }}
+          DB_NAME:      ${{ secrets.DB_NAME }}
+          DB_USER:      ${{ secrets.DB_USER }}
+          DB_PASSWORD:  ${{ secrets.DB_PASSWORD }}
+        run: |
+          if [ -z "$EC2_HOST" ] || [ -z "$EC2_KEY" ] || [ -z "$EC2_USER" ]; then
+            echo "⚠️ EC2シークレットが未設定のためデプロイをスキップします"
+            exit 0
+          fi
+
+          echo "$EC2_KEY" > deploy.pem
+          chmod 600 deploy.pem
+
+          ssh -o StrictHostKeyChecking=no -i deploy.pem ${EC2_USER}@${EC2_HOST} \
+            "DB_HOST='${DB_HOST}' DB_PORT='${DB_PORT}' DB_NAME='${DB_NAME}' DB_USER='${DB_USER}' DB_PASSWORD='${DB_PASSWORD}' bash -s" << 'ENDSSH'
+            set -e
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            cd ~/app
+
+            if [ -d ".git" ]; then
+              git remote set-url origin https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/${{ github.repository }}.git
+              # 既存の ~/app（別リポジトリの履歴）も上書きできるよう、pull ではなく取得した main に置き換える
+              # （.env・node_modules は .gitignore 対象のため消えない）
+              git fetch origin main
+              git reset --hard origin/main
+            else
+              git clone https://github.com/${{ github.repository }}.git .
+            fi
+
+            npm ci
+
+            printf 'DB_HOST=%s\nDB_PORT=%s\nDB_NAME=%s\nDB_USER=%s\nDB_PASSWORD=%s\nPORT=3000\n' \
+              "${DB_HOST}" "${DB_PORT}" "${DB_NAME}" "${DB_USER}" "${DB_PASSWORD}" > .env
+            chmod 600 .env
+
+            # マイグレーションを適用する(CREATE TABLE IF NOT EXISTS 等でべき等なため、毎回実行してよい)
+            for f in db/migrations/*.sql; do
+              echo "▶ マイグレーション適用: $f"
+              PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -f "$f"
+            done
+
+            pm2 restart app --update-env 2>/dev/null || pm2 start src/index.js --name app
+            pm2 save
+
+            echo "✅ デプロイ完了: $(date)"
+          ENDSSH
+
+          rm -f deploy.pem

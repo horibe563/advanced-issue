@@ -1,0 +1,660 @@
+/* 在庫管理アプリ 共通スタイル
+ * - helmet の CSP に合わせ、インラインの style 属性は使わずこのファイルにまとめる
+ * - スマートフォンの幅でも崩れないよう、表は横スクロール（.table-wrap）にする
+ */
+
+:root {
+  --color-text: #1f2933;
+  --color-muted: #52606d;
+  --color-border: #cbd2d9;
+  --color-bg: #f5f7fa;
+  --color-card: #ffffff;
+  --color-primary: #1d5fbf;
+  --color-primary-dark: #154a96;
+  --color-danger: #b42318;
+  --color-danger-bg: #fdecea;
+  --color-success: #1e7a34;
+  --color-success-bg: #e8f5ec;
+  --color-warning: #8a5a00;
+  --color-warning-bg: #fff4d6;
+  --color-alert-row: #fff1f0;
+  --radius: 6px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* hidden 属性の要素は、display を指定したクラスより優先して必ず隠す */
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", Meiryo, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin: 0 0 1rem;
+}
+
+h2 {
+  font-size: 1.15rem;
+  margin: 0 0 0.75rem;
+}
+
+a {
+  color: var(--color-primary);
+}
+
+/* ---- ヘッダー ---- */
+.site-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem 1rem;
+  background: #243b53;
+  color: #fff;
+}
+
+.site-title {
+  margin: 0;
+  font-weight: bold;
+  font-size: 1.1rem;
+}
+
+.nav-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.nav-list a {
+  color: #fff;
+  text-decoration: none;
+  padding: 0.25rem 0;
+  border-bottom: 2px solid transparent;
+}
+
+.nav-list a:hover,
+.nav-list a:focus-visible,
+.nav-list a[aria-current="page"] {
+  border-bottom-color: #fff;
+}
+
+/* ログインユーザ・ログアウト */
+.header-user {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.header-user[hidden] {
+  display: none;
+}
+
+.site-header .btn-header {
+  background: transparent;
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.7);
+}
+
+.site-header .btn-header:hover,
+.site-header .btn-header:focus-visible {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* ---- ログイン画面 ---- */
+.login-container {
+  max-width: 420px;
+}
+
+.login-container .actions {
+  justify-content: flex-end;
+}
+
+/* ---- レイアウト ---- */
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.card {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.form-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  gap: 0 1rem;
+  align-items: start;
+}
+
+.section-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.section-header h2 {
+  margin: 0;
+}
+
+.section-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.summary {
+  color: var(--color-muted);
+  margin: 0.25rem 0 0.5rem;
+  font-size: 0.95rem;
+}
+
+/* ---- フォーム ---- */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.85rem;
+  min-width: 0;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+  gap: 0 1rem;
+}
+
+.field label {
+  font-weight: bold;
+}
+
+.field-checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.field-checkbox label {
+  font-weight: normal;
+}
+
+input[type="text"],
+input[type="search"],
+input[type="password"],
+input[type="number"],
+input[type="date"],
+select {
+  width: 100%;
+  font: inherit;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: #fff;
+  color: inherit;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid #9ec5fe;
+  outline-offset: 1px;
+}
+
+/* 入力エラーの欄（色に加えて太い枠と下のメッセージで示す） */
+.is-invalid {
+  border: 2px solid var(--color-danger) !important;
+  background: var(--color-danger-bg) !important;
+}
+
+.field-error {
+  color: var(--color-danger);
+  font-size: 0.9rem;
+  font-weight: bold;
+}
+
+.field-error-text {
+  display: block;
+}
+
+.field-error-text::before {
+  content: "エラー：";
+}
+
+.hint {
+  color: var(--color-muted);
+  font-size: 0.85rem;
+}
+
+.required,
+.optional {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: normal;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  margin-left: 0.25rem;
+  vertical-align: middle;
+}
+
+.required {
+  background: var(--color-danger);
+  color: #fff;
+}
+
+.optional {
+  background: #e4e7eb;
+  color: var(--color-muted);
+}
+
+.note {
+  background: #eef4ff;
+  border-left: 4px solid var(--color-primary);
+  padding: 0.5rem 0.75rem;
+  margin: 0 0 0.85rem;
+  font-size: 0.9rem;
+}
+
+.mode-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.75rem;
+  margin: 0 0 0.85rem;
+}
+
+.mode-switch legend {
+  font-weight: bold;
+  padding: 0 0.25rem;
+}
+
+.mode-switch label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.search-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 0 1rem;
+  align-items: end;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.85rem;
+}
+
+/* ---- ボタン ---- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.5rem;
+  padding: 0.4rem 1rem;
+  font: inherit;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: #fff;
+  color: var(--color-text);
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  background: #f0f4f8;
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: var(--color-primary-dark);
+}
+
+.btn-danger {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
+.btn-danger:hover {
+  background: var(--color-danger-bg);
+}
+
+.btn-small {
+  min-height: 2rem;
+  padding: 0.2rem 0.65rem;
+  font-size: 0.9rem;
+}
+
+.btn:disabled,
+.btn[aria-busy="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ---- メッセージ ---- */
+.message {
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--color-border);
+}
+
+.message p {
+  margin: 0;
+  font-weight: bold;
+}
+
+.message ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.message-success {
+  background: var(--color-success-bg);
+  border-color: var(--color-success);
+  color: var(--color-success);
+}
+
+.message-success p::before {
+  content: "完了：";
+}
+
+.message-error {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.message-error p::before {
+  content: "エラー：";
+}
+
+.message-warning {
+  background: var(--color-warning-bg);
+  border-color: var(--color-warning);
+  color: var(--color-warning);
+}
+
+.message-warning p::before {
+  content: "注意：";
+}
+
+.message-info {
+  background: #eef4ff;
+  border-color: var(--color-primary);
+}
+
+/* ---- 表 ---- */
+/* スマートフォンでは表全体を横スクロールさせ、画面の幅は崩さない */
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 640px;
+  background: #fff;
+}
+
+.data-table th,
+.data-table td {
+  padding: 0.5rem 0.65rem;
+  border-bottom: 1px solid #e4e7eb;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.data-table th {
+  background: #f0f4f8;
+  font-size: 0.9rem;
+  position: sticky;
+  top: 0;
+}
+
+.data-table td.num,
+.data-table th.num {
+  text-align: right;
+}
+
+.data-table td.empty {
+  text-align: center;
+  color: var(--color-muted);
+  padding: 1.25rem;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.product-name {
+  display: block;
+  white-space: normal;
+  min-width: 10rem;
+}
+
+.kana {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  white-space: normal;
+}
+
+.row-actions {
+  display: flex;
+  gap: 0.35rem;
+}
+
+/* 在庫不足の行：背景色・左の太線・太字の在庫数とバッジ（色だけに頼らない） */
+.row-alert td {
+  background: var(--color-alert-row);
+}
+
+.row-alert td:first-child {
+  box-shadow: inset 4px 0 0 var(--color-danger);
+}
+
+.row-alert td.stock {
+  color: var(--color-danger);
+  font-weight: bold;
+}
+
+.row-alert td.stock::after {
+  content: " ▼";
+  font-size: 0.75rem;
+}
+
+/* ---- 在庫アラート（一覧画面上部のカード） ----
+ * 在庫不足のバッジ・行と同じ赤系の色で、左の太線と件数の太字で示す（色だけに頼らない） */
+.card-alert {
+  border-left: 4px solid var(--color-danger);
+}
+
+.card-alert h2::before {
+  content: "! ";
+  color: var(--color-danger);
+}
+
+.alert-summary {
+  color: var(--color-text);
+  font-weight: bold;
+}
+
+.alert-more {
+  margin: 0.5rem 0 0;
+}
+
+.data-table td.shortage {
+  color: var(--color-danger);
+  font-weight: bold;
+}
+
+/* 訂正伝票（伝票フラグ 2）の行 */
+.row-correction td {
+  background: #fafbfc;
+  font-style: italic;
+}
+
+.delta-plus {
+  color: var(--color-success);
+}
+
+.delta-minus {
+  color: var(--color-danger);
+}
+
+.badge {
+  display: inline-block;
+  font-size: 0.8rem;
+  font-weight: bold;
+  padding: 0.05rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.badge-alert {
+  background: var(--color-danger);
+  color: #fff;
+}
+
+.badge-alert::before {
+  content: "! ";
+}
+
+.badge-ok {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border-color: var(--color-success);
+}
+
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+/* ---- 子画面（dialog） ---- */
+.dialog {
+  width: min(960px, calc(100vw - 1.5rem));
+  max-height: calc(100vh - 2rem);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+}
+
+.dialog::backdrop {
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.dialog-body {
+  padding: 1rem;
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.dialog-header h2 {
+  margin: 0;
+}
+
+/* 入力フォームだけの子画面（ユーザ登録・パスワード設定） */
+.dialog-narrow {
+  width: min(520px, calc(100vw - 1.5rem));
+}
+
+/* ---- ユーザマスタ ---- */
+.badge-role-admin {
+  background: #ede9fe;
+  color: #5b21b6;
+  border-color: #5b21b6;
+}
+
+.badge-role-general {
+  background: #f1f5f9;
+  color: #334155;
+  border-color: #94a3b8;
+}
+
+.badge-self {
+  margin-left: 0.4rem;
+  background: #e0f2fe;
+  color: #075985;
+  border-color: #075985;
+}
+
+/* ---- スマートフォン幅 ---- */
+@media (max-width: 600px) {
+  body {
+    font-size: 15px;
+  }
+
+  .container {
+    padding: 0.75rem;
+  }
+
+  .card {
+    padding: 0.75rem;
+  }
+
+  .actions .btn {
+    flex: 1 1 auto;
+  }
+
+  .data-table {
+    min-width: 560px;
+  }
+}

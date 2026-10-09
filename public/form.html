@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>商品登録・入出庫登録 | 在庫管理</title>
+  <link rel="stylesheet" href="/style.css">
+  <!-- helmet の CSP（script-src 'self'）に合わせ、スクリプトは外部ファイルのみ読み込む -->
+  <script type="module" src="/js/form.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <p class="site-title">在庫管理</p>
+    <nav aria-label="メインメニュー">
+      <ul class="nav-list">
+        <li><a href="/index.html">在庫状況</a></li>
+        <li><a href="/form.html" aria-current="page">商品登録・入出庫登録</a></li>
+      </ul>
+    </nav>
+    <!-- ログインユーザ名・ログアウト（js/auth.js が表示する） -->
+    <div id="header-user" class="header-user" hidden></div>
+  </header>
+
+  <main class="container">
+    <h1>商品登録・入出庫登録</h1>
+
+    <!-- 操作結果・エラーの表示領域 -->
+    <div id="page-message" class="message" hidden></div>
+
+    <div class="form-layout">
+      <!-- 商品登録 -->
+      <section class="card" id="product-section" aria-labelledby="product-heading">
+        <h2 id="product-heading">商品登録</h2>
+        <form id="product-form" novalidate>
+          <div class="field">
+            <label for="p-jan-cd">JAN コード <span class="required">必須</span></label>
+            <input type="text" id="p-jan-cd" name="jan_cd" inputmode="numeric" maxlength="13" autocomplete="off" aria-describedby="p-jan-cd-hint">
+            <small id="p-jan-cd-hint" class="hint">8桁または13桁の数字（チェックデジットを含む）</small>
+            <div class="field-error" data-error-for="jan_cd" hidden></div>
+          </div>
+          <div class="field">
+            <label for="p-product-name">商品名 <span class="required">必須</span></label>
+            <input type="text" id="p-product-name" name="product_name" maxlength="200" autocomplete="off">
+            <div class="field-error" data-error-for="product_name" hidden></div>
+          </div>
+          <div class="field">
+            <label for="p-product-spec">規格</label>
+            <input type="text" id="p-product-spec" name="product_spec" maxlength="200" autocomplete="off">
+            <div class="field-error" data-error-for="product_spec" hidden></div>
+          </div>
+          <div class="field">
+            <label for="p-product-name-kana">商品名カナ</label>
+            <input type="text" id="p-product-name-kana" name="product_name_kana" maxlength="200" autocomplete="off">
+            <div class="field-error" data-error-for="product_name_kana" hidden></div>
+          </div>
+          <div class="field">
+            <label for="p-generic-item1">汎用項目1</label>
+            <input type="text" id="p-generic-item1" name="generic_item1" maxlength="255" autocomplete="off">
+            <div class="field-error" data-error-for="generic_item1" hidden></div>
+          </div>
+          <div class="field">
+            <label for="p-generic-item2">汎用項目2</label>
+            <input type="text" id="p-generic-item2" name="generic_item2" maxlength="255" autocomplete="off">
+            <div class="field-error" data-error-for="generic_item2" hidden></div>
+          </div>
+          <div class="field">
+            <label for="p-generic-item3">汎用項目3</label>
+            <input type="text" id="p-generic-item3" name="generic_item3" maxlength="255" autocomplete="off">
+            <div class="field-error" data-error-for="generic_item3" hidden></div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="p-stock">初期在庫</label>
+              <input type="number" id="p-stock" name="stock" min="0" step="1" inputmode="numeric" aria-describedby="p-stock-hint">
+              <div class="field-error" data-error-for="stock" hidden></div>
+            </div>
+            <div class="field">
+              <label for="p-threshold">閾値</label>
+              <input type="number" id="p-threshold" name="threshold" min="0" step="1" inputmode="numeric" aria-describedby="p-threshold-hint">
+              <small id="p-threshold-hint" class="hint">在庫数がこの値を下回ると一覧でアラート表示します（省略時 0）</small>
+              <div class="field-error" data-error-for="threshold" hidden></div>
+            </div>
+          </div>
+          <p id="p-stock-hint" class="note">
+            注記：初期在庫を 1 以上で指定すると、同じ数量の<strong>初期入庫伝票</strong>（伝票フラグ 1：正、入庫日は当日）が自動で作成され、入出庫履歴に表示されます。在庫数が二重に加算されることはありません。省略時の在庫数は 0 です。
+          </p>
+          <div class="actions">
+            <button type="submit" id="product-submit" class="btn btn-primary">商品を登録</button>
+            <button type="reset" class="btn">入力をクリア</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- 入出庫登録 -->
+      <section class="card" id="stock-section" aria-labelledby="stock-heading">
+        <h2 id="stock-heading">入出庫登録</h2>
+        <form id="stock-form" novalidate>
+          <fieldset class="mode-switch">
+            <legend>登録の種類</legend>
+            <label><input type="radio" name="mode" value="new" checked> 新規伝票</label>
+            <label><input type="radio" name="mode" value="correction"> 訂正伝票</label>
+          </fieldset>
+          <p class="note" id="correction-note" hidden>
+            訂正は元の伝票を上書きせず、同じ伝票NOに訂正行を追加します。
+            例：数量 3 の入庫を 2 に直す場合は、伝票フラグ「2：負」・数量 1 で登録します。
+          </p>
+
+          <div class="field">
+            <label for="s-type">種別 <span class="required">必須</span></label>
+            <select id="s-type" name="type">
+              <option value="in">入庫</option>
+              <option value="out">出庫</option>
+            </select>
+            <div class="field-error" data-error-for="type" hidden></div>
+          </div>
+
+          <!-- 新規伝票のみ -->
+          <div class="field" data-mode="new">
+            <label for="s-jan-cd">JAN コード <span class="required">必須</span></label>
+            <input type="text" id="s-jan-cd" name="jan_cd" inputmode="numeric" maxlength="13" autocomplete="off" list="jan-list">
+            <datalist id="jan-list"></datalist>
+            <div class="field-error" data-error-for="jan_cd" hidden></div>
+          </div>
+
+          <!-- 訂正伝票のみ -->
+          <div class="field" data-mode="correction" hidden>
+            <label for="s-slip-no">伝票NO <span class="required">必須</span></label>
+            <input type="number" id="s-slip-no" name="slip_no" min="1" step="1" inputmode="numeric">
+            <small class="hint">訂正する元伝票の伝票NO（右の履歴で確認できます）</small>
+            <div class="field-error" data-error-for="slip_no" hidden></div>
+          </div>
+
+          <div class="field">
+            <label for="s-quantity">数量 <span class="required">必須</span></label>
+            <input type="number" id="s-quantity" name="quantity" min="1" step="1" inputmode="numeric">
+            <small class="hint">1 以上の整数</small>
+            <div class="field-error" data-error-for="quantity" hidden></div>
+          </div>
+
+          <!-- 訂正伝票のみ -->
+          <div class="field" data-mode="correction" hidden>
+            <label for="s-slip-flag">伝票フラグ <span class="required">必須</span></label>
+            <select id="s-slip-flag" name="slip_flag">
+              <option value="2">2：負（数量を減らす訂正）</option>
+              <option value="1">1：正（数量を増やす訂正）</option>
+            </select>
+            <div class="field-error" data-error-for="slip_flag" hidden></div>
+          </div>
+
+          <div class="field">
+            <label for="s-date">日付 <span id="s-date-label-note" class="optional">省略時は当日</span></label>
+            <input type="date" id="s-date" name="date">
+            <div class="field-error" data-error-for="date" hidden></div>
+          </div>
+
+          <div class="actions">
+            <button type="submit" id="stock-submit" class="btn btn-primary">入出庫を登録</button>
+            <button type="reset" class="btn">入力をクリア</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <!-- 同じページの一覧（フォーム送信成功時に自動で更新する） -->
+    <section class="card" aria-labelledby="mini-stock-heading">
+      <div class="section-header">
+        <h2 id="mini-stock-heading">在庫状況（簡易）</h2>
+        <div class="section-tools">
+          <button type="button" id="mini-stock-reload" class="btn btn-small">再読み込み</button>
+        </div>
+      </div>
+      <p id="mini-stock-summary" class="summary" aria-live="polite"></p>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">状態</th>
+              <th scope="col">JAN</th>
+              <th scope="col">商品名</th>
+              <th scope="col" class="num">在庫数</th>
+              <th scope="col" class="num">閾値</th>
+            </tr>
+          </thead>
+          <tbody id="mini-stock-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="recent-heading">
+      <div class="section-header">
+        <h2 id="recent-heading">直近の入出庫履歴</h2>
+        <div class="section-tools">
+          <button type="button" id="recent-reload" class="btn btn-small">再読み込み</button>
+        </div>
+      </div>
+      <p id="recent-summary" class="summary" aria-live="polite"></p>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">日付</th>
+              <th scope="col">種別</th>
+              <th scope="col">伝票NO</th>
+              <th scope="col" class="num">SEQ</th>
+              <th scope="col">JAN</th>
+              <th scope="col">商品名</th>
+              <th scope="col">伝票フラグ</th>
+              <th scope="col" class="num">数量</th>
+              <th scope="col" class="num">在庫への影響</th>
+            </tr>
+          </thead>
+          <tbody id="recent-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

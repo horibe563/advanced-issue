@@ -1,0 +1,388 @@
+
+### 課題C：[テーマA：在庫管理アプリ]
+- ゴール（C-前半）：ローカルで基本CRUDとフロントエンドが動く状態
+- ゴール（C-後半）：追加機能実装・EC2デプロイ完了
+- 分解（C-前半）：
+  - STEP1　要件定義書作成
+  - STEP2　Subagent定義
+  - STEP3　DB設計・マイグレーション
+  - STEP4　基本CRUD実装
+  - STEP5　テスト追加
+  - STEP6　フロントエンド実装
+- 検証：
+- 失敗予測：
+
+
+### STEP3　DB設計・マイグレーション（2026-10-07）
+- 実施内容：
+  - docs/requirements.md の「DBテーブル設計」をもとに db/migrations/ に連番SQLを作成
+    - 001_create_common_functions.sql：更新時刻・更新シーケンス自動更新のトリガー関数
+    - 002_create_users.sql：ユーザマスタ（users）
+    - 003_create_products.sql：商品マスタ（products）※在庫数・閾値を含む
+    - 004_create_stock_ins.sql：入庫履歴（stock_ins）
+    - 005_create_stock_outs.sql：出庫履歴（stock_outs）
+    - 006_insert_initial_admin.sql：初期管理者（ID: admin / PW: password、bcryptハッシュで格納）
+  - 外部キー：入出庫履歴.jan_cd → products、全テーブルの登録者・更新者 → users
+  - コメントは SQLコメント＋COMMENT ON で日本語
+- 設計上の決定事項：
+  - 伝票フラグ：1=正 / 2=負。数量は常に正の整数で、符号は伝票フラグで表す
+  - 訂正は元の行を上書きせず、同一伝票NOで行を追加する（例：数量3・フラグ1 を -1 訂正 → 同一伝票NO・フラグ2・数量1）
+  - 伝票NO：数値型（BIGINT、アプリ側で採番）。伝票シーケンスNO：同一伝票NO内の連番（元伝票=1、訂正ごとに+1）
+  - 在庫数の加減算はアプリ側で行う（DB側で自動計算しない）
+  - 削除は論理削除（削除フラグ）。更新シーケンスは楽観ロックに使用
+- 検証：
+  - 一時DBで001〜006を順に適用し、制約（数量0・存在しないJAN・不正なロール/フラグ・伝票NO重複など）が拒否されることを確認
+  - todo_db に001〜006を適用し、\dt で products / stock_ins / stock_outs / users を確認。users に admin が登録済み
+- 失敗・気づき：
+  - backend-architect サブエージェントがこのセッションで読み込まれておらず、定義内容を渡した汎用エージェントで代替した（Claude Code の再起動で読み込まれる想定）
+  - DBパスワードが想定と違っていた（.env の値を確認して解決。値は公開リポジトリのため記載しない）
+  - 当初は伝票フラグ（登録/訂正）・伝票NO・伝票シーケンスNOの仕様が要件定義書になく、ヒアリングして追加した → 要件定義書（DBテーブル設計・入出庫伝票のルール）に反映済み
+
+### STEP4　基本CRUD実装（2026-10-08・着手前の決定事項）
+- サブエージェント未読み込みの原因：.claude/agents/*.md の1行目が空行で、frontmatter（---）が2行目から始まっていた → 空行を削除。Claude Code 再起動後に backend-architect / security-auditor で実装・監査する
+- POST /api/products は jan_cd 必須（DB設計どおり）。name → product_name に対応。完了確認は {"jan_cd":"4901234567894","name":"商品A","stock":100,"threshold":10} で行う
+- 認証は未実装のため、登録者・更新者（created_by / updated_by）は暫定で 'admin' 固定。ログイン実装時に差し替える
+- src/db/pool.js は Month 1（~/my-claude-project）のものを流用。.env.example を用意し、.env（DB接続情報）は各自で作成する
+
+### STEP4　基本CRUD実装（2026-10-08・実装〜監査〜修正）
+- 実施内容：
+  - 要件定義書のAPI一覧を修正：PUT → POST、product → products、regerence → reference、POST products を追加
+  - backend-architect で基本CRUD APIを実装（src/routes/ に products.js / stockinout.js / usr.js）
+    - 商品：GET /api/products（is_alert 付き）、GET・PUT・DELETE /api/products/:jan_cd（DELETEは論理削除）、POST /api/products
+    - 入出庫：GET /api/stockinout（入庫・出庫をまとめて返す）、POST /api/stockinout（新規・訂正）
+    - ユーザ：GET /api/usr、POST /api/usr（登録・更新）、DELETE /api/usr/:user_id
+    - 共通：バリデーション（必須・型・桁数・範囲・日付・JANチェックデジット・未定義項目の拒否）、共通エラーハンドラ（400/404/409/413/500、500は内部情報を返さない）、パラメータ化クエリ、update_seq による楽観ロック
+  - security-auditor でセキュリティ監査 → 今すぐ直すべき Low 5件を backend-architect で修正
+    - type=constructor 等のプロトタイプ名が検証を通り500になる件（TABLES を Object.create(null) + Object.hasOwn に）
+    - パスワードの空文字・空白のみで500になる件（400に）
+    - クエリの NUL 文字（%00）で500になる件（400に、PG_ERROR_MAP に 22021 追加）
+    - 初期在庫と入出庫履歴がずれる件（方針b：初期入庫伝票を自動作成）
+    - DB接続プールに statement_timeout / max / connectionTimeoutMillis を設定（環境変数で上書き可）
+- 設計上の決定事項：
+  - マイナス在庫は拒否（409）。商品行を SELECT ... FOR UPDATE でロックして加減算する
+  - 伝票NOは入庫・出庫で共通の連番（pg_advisory_xact_lock で採番を直列化、src/db/slipNo.js に共通化）
+  - 新規伝票は伝票フラグ1のみ。伝票フラグ2は訂正伝票でのみ使う
+  - 在庫数は入出庫APIでのみ変更する（PUT /api/products では変更不可）
+  - 初期在庫：POST /api/products で stock > 0 のとき、同一トランザクションで初期入庫伝票（slip_seq=1・フラグ1・当日）を作る。products.stock に初期値を入れ、伝票は履歴として作るだけ（二重加算しない）。レスポンスに initial_slip_no を返す
+  - 有効な管理者が0人になる降格・削除は409
+  - 削除済みの JAN・ユーザIDでの再登録は409（復活機能なし）
+  - パスワード変更・ユーザ削除時はトークンを NULL にする
+- 検証：
+  - curl で正常系・異常系を確認。完了確認の POST /api/products {"jan_cd":"4901234567894","name":"商品A","stock":100,"threshold":10} → 201
+  - 同時実行（入庫・出庫を10並列）で在庫数のずれ・伝票NOの重複なし
+  - 修正後、type=constructor / __proto__・%00 → 400、初期入庫伝票が作られ在庫は100（200にならない）、既存の正常系も動作
+  - npm audit --omit=dev → 0 vulnerabilities
+  - テストデータは削除済み（products / stock_ins / stock_outs は0件、users は admin のみ）
+- 未対応・持ち越し：
+  - login / validatetoken（次のステップ）。それまで登録者・更新者は src/utils/operator.js で 'admin' 固定、/api/usr の管理者限定もなし → テスト環境の外に出さない
+  - 認証実装時に対応：初期管理者パスワードの変更強制（must_change_password）、login を POST に、トークンのハッシュ化保存、ロール変更時のトークン無効化、ログインの総当たり対策・レート制限、パスワードポリシー、user_id の大文字小文字の扱い
+  - reference API は仕様未確定のため保留
+  - statement_timeout（SQLSTATE 57014）は現在500。503 にするか要検討
+  - 更新で "password": null は未指定扱い（200）。400 にするか要検討
+  - 自動テスト（STEP5）
+- 失敗・気づき：
+  - 要件定義書のAPI一覧にメソッド・パスの誤記が複数あった（実装前に修正）
+  - security-auditor は Bash を持たないため npm audit を実行できない → メインで実行した
+
+### STEP5　テスト追加（2026-10-08）
+- 実施内容：
+  - backend-architect で jest + supertest のテストを追加（__tests__/ 配下に13ファイル、Month 1 と同じ AAA パターン・「正常系/異常系」の命名）
+  - jest.config.js（collectCoverage、coverageThreshold global 70%）、jest.setup.js（DB接続先をダミー値に置き換え、todo_db に接続させない安全装置）、__tests__/helpers/mockDb.js（SQLの正規表現で応答するモック）
+  - pool をモックしたユニットテストのみ。セキュリティ監査で直した5件の回帰テストを含む
+- 検証：
+  - npm run test:coverage → 13スイート・417件すべて成功。カバレッジ Stmts 99.62% / Branch 99.43% / Funcs 100% / Lines 99.58%（N2 の70%を達成）
+  - todo_db は作業前と同じ状態（products / stock_ins / stock_outs 0件、users は admin のみ）
+- 見つかったバグ：
+  - 修正済み：errorHandler の PG_ERROR_MAP[err.code] がプロトタイプのプロパティを参照していた（Object.hasOwn で判定するよう修正、回帰テスト追加）
+  - 未修正・要判断：入出庫日の 0001〜0099 年が400になる（Date.UTC の仕様。下限日付を仕様で決めるか）
+  - 未修正・要判断：一覧の検索条件の文字数チェックが、products は空白除去前、usr は除去後で揃っていない
+- 失敗・気づき：
+  - 接続ユーザに CREATE DATABASE 権限がない（rolcreatedb=false）ため、実DBを使う結合テストは作れなかった
+    → 並列の入出庫での在庫・伝票NOの整合性、FOR UPDATE / advisory lock の実際の直列化はテストで担保できていない（STEP4 の手動確認のみ）
+    → DB管理者に inventory_test の作成（OWNER を接続ユーザに）か CREATEDB 権限の付与を依頼すれば追加できる
+
+### STEP6　フロントエンド実装（2026-10-08）
+- 実施内容：
+  - frontend-developer で静的配信と画面を実装
+  - 静的配信：express.json() は src/app.js にあるため、src/app.js の express.json() の直後に app.use(express.static(path.join(__dirname, '..', 'public'))) を追加（起動ディレクトリに依存しないよう絶対パス）
+  - public/index.html（在庫状況一覧：is_alert の行を色＋「在庫不足」バッジで強調、商品名・カナ検索、アラートのみ表示、入出庫履歴の子画面（dialog）、削除）
+  - public/form.html（商品登録・入出庫登録（新規／訂正の切り替え）、同じページに簡易在庫一覧と直近の入出庫履歴、送信成功で自動更新）
+  - public/style.css、public/js/（api.js：fetch 共通処理、ui.js、format.js、index.js、form.js）
+- 設計上の決定事項：
+  - helmet の既定 CSP は緩めない → インライン script / onclick / style 属性は使わず、外部 JS（type="module"）と addEventListener
+  - API の文字列は textContent / createTextNode で表示し、innerHTML は使わない（監査 I-6）
+  - fetch の失敗は ApiError {kind, status, message, details} に統一（ネットワーク・15秒タイムアウト・HTTPエラー・JSONでない応答・204）
+  - 400 は details を各入力欄の近くに表示、404/409/413/500 は画面上部に表示、409 は一覧を再取得して再操作を案内、送信中はボタンを無効化
+  - index.html は戻る（pageshow）・focus・visibilitychange で自動再読み込み（1秒以内の重複はまとめる）
+- 検証：
+  - curl：/・/index.html・/form.html・/style.css・/js/*.js が 200、/../.env は 404、API も引き続き動作
+  - jsdom で画面のスクリプトを実サーバに対して実行し、登録→一覧反映、入出庫・訂正→在庫反映、400 の欄ごとの表示、409 の案内、アラート表示、履歴の子画面、XSS 文字列がそのまま表示されることを確認
+  - npm run test:coverage → 13スイート・422件すべて成功（静的配信のテストを追加）、カバレッジ 99.62%
+  - todo_db は作業前の状態に戻した
+- 未対応・持ち越し：
+  - helmet の既定 CSP の upgrade-insecure-requests により、EC2 で http 配信すると CSS/JS が https に切り替わって読めない見込み → デプロイ前に https 化するか、このディレクティブだけ外すか決める
+  - 実機ブラウザでの表示（レイアウト・スマートフォン幅）は未確認
+  - フロントエンド JS の自動テストなし
+  - ログイン画面・ユーザマスタ画面・商品の更新（PUT）画面は未作成
+- 失敗・気づき：
+  - 依頼では「src/index.js の express.json() の直後」だったが、STEP4 で app.js / index.js に分割していたため app.js に追加した
+
+### STEP7　API の認証必須化（2026-10-08）
+- 実施内容：
+  - 業務 API（/api/products・/api/stockinout・/api/usr）を、有効なアクセストークンを持つログインユーザのみ呼べるようにした
+  - src/routes/auth.js：POST /api/login（トークン発行）、GET /api/validatetoken、POST /api/logout
+  - src/middleware/auth.js：requireAuth（Authorization: Bearer <token> を検証し req.user を設定、だめなら 401）、requireAdmin（admin 以外は 403）
+  - src/auth/token.js：トークンは crypto.randomBytes(32) の16進64文字。DB の users.token には SHA-256 のハッシュ値のみ保存、有効期限は1日
+  - src/utils/operator.js：登録者・更新者を 'admin' 固定からログインユーザのIDに差し替え
+  - 画面：public/login.html・js/login.js（ログイン画面）、js/auth.js（各画面の読み込み時にトークン確認、ヘッダーにユーザ名・ログアウト）、js/api.js（全リクエストにトークンを付与、401 でトークンを消してログイン画面へ）
+- 設計上の決定事項：
+  - login はパスワードを URL に残さないため POST（要件表の GET から変更）
+  - ユーザなし・パスワード不一致・削除済みは同じ 401・同じメッセージ。ユーザなしでもダミーハッシュで bcrypt.compare を実行し、応答時間の差でユーザIDの存在を推測させない
+  - ログインし直すとトークンを上書きする（1ユーザ1トークン。別の端末の前のトークンは無効になる）
+  - ロールは requireAuth で毎回 DB から読むため、ロール変更はすぐ反映される（トークンの無効化は不要）
+  - /api/usr は要件「管理画面はAdminユーザのみが操作可能」に合わせて管理者限定（一般ユーザは 403）
+  - ログイン後の遷移先 ?next= は「/ で始まり // で始まらない」パスのみ許可（オープンリダイレクト対策）
+  - ルートのテストは __tests__/helpers/mockAuth.js で認証をモック（admin でログイン済み）し、トークン検証は __tests__/middleware/auth.test.js で app に組み込んだ状態でテストする
+- 検証：
+  - npm test → 16スイート・470件すべて成功、カバレッジ Stmts 99.66% / Branch 99.48%
+  - 別ポート（3100）で起動し curl で確認：トークンなし → 4 API とも 401、誤パスワード → 401、admin/password でログイン → トークン発行・4 API とも 200、ログアウト後のトークン → 401、login.html・js が 200
+  - 起動中のサーバ（3000）は再起動していないため、変更は再起動後に反映される
+- 未対応・持ち越し：
+  - ログインの総当たり対策・レート制限、初期管理者パスワードの変更強制、パスワードポリシー
+  - ログイン画面・トークン切れ時の遷移の実機ブラウザ確認（このサーバにブラウザ・jsdom がないため未実施）
+  - ユーザマスタ画面（管理者のみメニュー表示）は未作成
+
+### STEP8　ユーザマスタ画面（2026-10-08）
+- 実施内容：
+  - public/users.html・js/users.js：ユーザマスタ画面（管理者のみ）
+    - 初期表示は検索窓のみ（要件）。ユーザID・氏名の部分一致で GET /api/usr、100件ずつのページング
+    - ユーザ登録（子画面）：POST /api/usr。確認用パスワードの一致は画面側で確認し、登録後はそのユーザIDで一覧を表示
+    - パスワード設定（子画面）：POST /api/usr（user_id・update_seq・password）
+    - 削除：確認のうえ DELETE /api/usr/:user_id?update_seq=N
+  - js/auth.js：管理者のときだけヘッダーに「ユーザマスタ」メニューを追加（validatetoken で一般に変わっていたら消す）
+  - style.css：パスワード欄のスタイル（ログイン画面も未適用だった）、ロール・自分のバッジ、幅の狭い子画面
+  - フロントエンドの自動テストを追加：jest を backend（node）・frontend（jsdom）の2 project に分割。画面の ES Modules はテスト時のみ @babel/plugin-transform-modules-commonjs で変換
+    - __tests__/public/users.test.js（30件）・auth.test.js（4件）・helpers/dom.js（HTML読込・fetch モック）
+- 設計上の決定事項：
+  - API はバックエンドに既存のものを使い、変更なし
+  - 権限の判定はサーバ側（requireAdmin）。画面側は保管しているロールで表示を切り替えるだけで、API が 403 を返したら操作部分を隠して案内する
+  - 自分自身のパスワード変更・削除はサーバ側でトークンが無効になるため、完了メッセージの2秒後にログイン画面へ遷移する
+  - 409（楽観ロックの不一致・最後の管理者）は一覧を再取得して再操作を案内する
+  - ロール・氏名の変更は要件（登録・削除・パスワード設定）にないため画面には入れていない（API は対応済み）
+- 検証：
+  - npm test → 18スイート・504件すべて成功。わざと実装を壊すとフロントエンドのテストが失敗することも確認
+  - カバレッジの計測対象に public/js を追加：全体 Stmts 72.54% / Branch 72.25% / Funcs 71.64% / Lines 73.94%（src は 99% 台、users.js 93.68%）
+  - 別ポート（3999）で起動し、一時管理者（zz-e2e-admin）で確認：users.html・js が 200、登録 201、一般ユーザの /api/usr は 403、パスワード設定 200 → 旧トークン・旧パスワードは 401・新パスワードは 200、削除 204 → 検索に出ない・ログイン 401。一時ユーザは物理削除し、todo_db は作業前の状態に戻した
+  - 起動中のサーバ（3000）は再起動していない（静的ファイルのみの変更のため再起動なしで反映される）
+- 未対応・持ち越し：
+  - index.js・form.js・login.js のフロントエンドテストはまだない（カバレッジ 0%。全体カバレッジが 70% ぎりぎりのため、追加を推奨）
+  - 実機ブラウザでの表示確認（このサーバにブラウザがないため未実施）
+  - ログイン・ログアウトでも users.update_seq が増えるため、対象ユーザがログインした直後のパスワード設定・削除は 409 になる（再取得すれば操作できる）
+- 失敗・気づき：
+  - npm install @babel/preset-env は最新版（v8）が @babel/core 7 と競合したため、ESM 変換プラグインのみ v7 を導入
+  - jest の projects 使用時、collectCoverageFrom は project 内では効かずトップレベルに書く必要があった
+
+### STEP9　追加機能（在庫アラート通知・CSV出力）を Agent Team で実装（2026-10-09）
+- 体制（docs/agent-teams.md に従う）：
+  - manager-architect：メインセッション（基本設計・指示・統合・最終確認）
+  - backend-architect：backend-architect サブエージェント（src/）
+  - frontend-architect：frontend-developer サブエージェント（public/）
+  - test-architect：general-purpose サブエージェント（__tests__/、Jest + supertest / jsdom）
+  - security-architect：security-auditor サブエージェント（レビューのみ。修正は backend / frontend 担当に依頼）
+  - 依存関係：manager → backend → frontend（バックエンド完了を待つ）／test（backend 完了後にバックエンドのテストを先行）→ security → 修正 → 再テスト
+- 着手前の状態：npm run test:coverage → 18スイート・504件成功、全体カバレッジ Stmts 72.54% / Branch 72.25% / Funcs 71.64% / Lines 73.94%
+
+#### 基本設計（manager）
+- A. 在庫アラート通知：GET /api/products/alerts（ログイン必須）
+  - 対象：削除されていない商品のうち 在庫数 < 閾値（既存の is_alert と同じ定義）
+  - 並び順：不足数（閾値 − 在庫数）の大きい順 → JAN コード順
+  - クエリ：limit / offset のみ（既存の parsePaging。それ以外は 400）
+  - 応答：{ total, count, limit, offset, items: [{ jan_cd, product_name, product_spec, product_name_kana, stock, threshold, shortage, updated_at }] }
+  - ルートは /:jan_cd より前に登録する（"alerts" が JAN として検証され 400 になるのを防ぐ）
+- B. CSV出力：GET /api/products/export（ログイン必須）
+  - 検索条件は一覧と同じ（jan_cd / product_name / product_name_kana / alert）。ページングなしで条件に一致する全件、JAN コード順
+  - 列：JANコード, 商品名, 規格, 商品名カナ, 汎用項目1〜3, 在庫数, 閾値, 在庫アラート（在庫不足／空）, 更新日時（JST）, 更新者
+  - UTF-8（BOM 付き・Excel 対応）、改行 CRLF、RFC 4180 のクォート
+  - CSV インジェクション対策：= + - @ タブ CR で始まる文字列は先頭に ' を付ける
+  - Content-Type: text/csv; charset=utf-8、Content-Disposition: attachment; filename="inventory_YYYYMMDD_HHmmss.csv"、Cache-Control: no-store
+  - 件数上限 100,000 件（超える場合は 400「条件を絞ってください」）
+- 画面（index.html）：
+  - 上部に「在庫アラート」カード（件数と不足数の大きい順の一覧。0件なら「ありません」）。既存の再読み込みタイミングで更新
+  - 商品一覧のツールに「CSV出力」ボタン（現在の検索条件で出力）。認証ヘッダーが必要なため fetch → Blob → a[download] で保存
+
+#### 実装ログ
+- [backend] src/routes/products.js に GET /alerts・GET /export を追加、src/utils/csv.js（formatCsvValue / toCsvLine / toCsv）を新規作成。一覧の検索条件の組み立てを buildSearchConditions に切り出し、一覧と CSV 出力で共有（一覧の SQL・メッセージは変更なし）
+  - 既存テスト 504件成功。ただし新規コードが未テストのため全体の Funcs が 67.63% に低下（しきい値 70% 未満）→ test 担当で回復させる
+  - 実 DB での curl 確認は admin / password のログインが 401 で不可（初期パスワードが変更済みと思われる）→ 認証だけスタブした supertest で実 DB に SELECT のみ実行し、alerts（0件）・export（BOM・CRLF・JST・ヘッダー）を確認
+  - 実 DB にアラート対象の商品がないため、並び順・「在庫不足」列はユニットテストで担保する
+- [manager] backend の差分をレビュー：設計どおり。BOM が不可視文字のリテラルなので '﻿' 表記に直す（修正ラウンドで対応）。backend の「eslint の終了コード 1」は eslint 未導入による npx の失敗で、指摘ではない
+- [manager] backend 完了を受けて frontend（index.html のアラートカード・CSV出力ボタン、api.js に apiDownload）と test（バックエンドのテスト）を並列で開始
+- [test] バックエンドのテストを追加：__tests__/utils/csv.test.js（43件）、__tests__/routes/products.alerts-export.test.js（32件）、__tests__/middleware/auth.test.js に未ログイン 401 を2件追加
+  - npm run test:coverage → 20スイート・579件成功、全体 Stmts 70.36% / Branch 70.34% / Funcs 70.27% / Lines 71.55%（products.js・csv.js は 100%）。不具合なし
+  - 一覧の buildSearchConditions への切り出しで既存の挙動が変わっていないことを既存テストで確認
+- [manager] test からの仕様の疑問への判断
+  - JANコード列が Excel で数値扱いになる件：="..." 形式は Excel 以外のツールで値が壊れるため採用しない。CSV はプレーンなテキスト（RFC 4180）のままとする（JAN は 13桁固定のため先頭0以外は表示形式の問題）
+  - "-20℃" 等の正当な文字列にも ' が付く件：安全側として設計どおりとする
+  - 先頭が空白＋= の値・10万行の一括読み込みのメモリ負荷：security のレビュー観点として渡す
+- [frontend] public/js/api.js（送信・JSON 解釈・HTTP エラー処理を send / parseJson / throwIfHttpError に共通化し、apiDownload と filenameFromDisposition を追加。ダウンロードのタイムアウトは 60秒）、public/index.html（「在庫アラート」カード、「CSV出力」ボタン）、public/js/index.js（loadAlerts / renderAlerts / reloadAll / exportCsv / saveBlob）、public/style.css
+  - 一覧と同じタイミング（初期表示・再読み込み・画面に戻ったとき・削除後）でアラートも更新。アラートの取得エラーはカード内のみに表示し、一覧の表示は妨げない
+  - ファイル名は Content-Disposition から取り、英数字と _ - . だけで先頭が . でないもの（100文字以内）に限る。それ以外は inventory.csv
+  - 既存テスト 579件成功。ただし index.js のカバレッジが 0% で、全体の Branch は 70.34%（しきい値ぎりぎり）
+- [manager] frontend の差分をレビュー：既存の規約（textContent・CSP・ApiError）に沿っている。apiGet / apiPost / apiDelete の挙動も変わっていない
+- [manager] frontend のテスト（test）とセキュリティレビュー（security）を並列で開始（指摘を受けた修正の後に再テストする）
+- [security] レビュー結果：Critical / High なし。認可（requireAuth 配下・ルート順）、SQL（固定文字列＋パラメータ）、XSS（textContent）、ヘッダーインジェクション、一覧の検証は問題なし
+  - S9-01 Medium：export が最大 10万行をメモリに読み込み、同期処理で CSV を組み立てる（同時実行の制限なし → 連打でヒープ枯渇の恐れ）
+  - S9-02 Low：CSV インジェクションの判定から、先頭の空白類・LF・全角 ＝＋－＠ が漏れている（API 経由では trim されるが、多層防御として出力側でも防ぐ）
+  - S9-03 Low：statement_timeout（57014）が 500 になる
+  - S9-04 Low：Blob URL の解放が早すぎて、一部のブラウザで保存に失敗する恐れ
+  - S9-05 Low：保存名の拡張子が .csv に限られていない／成功応答の Content-Type を確認していない
+  - S9-06 Info：API 全体に Cache-Control がない（既存）。S9-07 Info：出力の監査ログがない。S9-08 Info：BOM の表記。S9-09 Info：トークンを localStorage に保管している（要件どおり）
+- [manager] 指摘への判断：S9-01（同時実行は最大2件で超えたら 429、上限を 50,000件に下げる、res.end で ETag の計算を省く）・S9-02・S9-03（503）・S9-04・S9-05・S9-07（監査ログ）・S9-08 を今回直す。ストリーミング出力・レート制限・S9-06・S9-09 は持ち越し
+  - 設計を変更：CSV の件数上限は 100,000件 → 50,000件
+  - backend と frontend に修正を依頼（並列）
+- [frontend] 修正：S9-04（Blob URL の解放を 10秒後に）、S9-05a（保存名は .csv 必須。大文字小文字は区別しない）、S9-05b（成功応答の Content-Type が text/csv でなければ parse エラー）。429 / 503 は既存の showApiError でメッセージがそのまま出るため、既定メッセージの追加のみ
+- [backend] 修正：S9-01（同時実行は最大2件。超えたら 429。入力エラーではカウンタを消費せず、finally で必ず戻す／上限 50,000件／Buffer＋Content-Length を res.end で返し ETag を付けない）、S9-02（先頭の空白類・BOM・全角 ＝＋－＠・LF も対象）、S9-03（57014 → 503）、S9-07（成功時に監査ログを console.info で1行。user_id・条件・件数・時刻のみで、トークンは含めない）、S9-08（'﻿' 表記）
+  - 仕様変更により既存テスト12件が失敗（上限値・57014・" =1"・Content-Type チェック）→ test 担当に期待値の更新とテストの追加を依頼
+  - 気づき：同時実行の制限はプロセス単位（複数インスタンスにすると合計は 2×台数）。57014 のログのラベルが「DB 制約エラー」のまま（持ち越し）
+- [manager] backend の修正を確認：BOM・正規表現の文字はエスケープ表記で書かれている。statement_timeout は pool.js で既定 5秒が設定済み
+- [test] フロントエンドのテストを追加：__tests__/public/api.test.js（49件）、__tests__/public/index.test.js（35件）、helpers/dom.js の mockFetch を後方互換のまま拡張（headers・Blob・Promise を返す handler）。frontend の不具合はなし
+  - カバレッジ：全体 Stmts 84.61% / Branch 82.96% / Funcs 86.22% / Lines 86.12%、index.js 95.5%、api.js 100%（form.js・login.js は今回の対象外で 0% のまま）
+  - backend の修正による期待値の変更（9件）は、修正の確定後に更新するよう指示した
+- [test] 修正への追随と追加テスト：products.alerts-export.test.js（53件。429・枠の解放・入力エラーで枠を消費しない・ETag なし・Content-Length・BOM・監査ログ）、csv.test.js（55件。空白類・BOM・全角記号の境界値）、errorHandler.test.js（57014 → 503）、api.test.js（54件）、index.test.js（40件）。並行実行のテストを3回続けて実行し、すべて成功。不具合なし
+
+#### 統合・最終確認（manager）
+- npm run test:coverage → 22スイート・704件すべて成功（着手前は 18スイート・504件）
+  - 全体 Stmts 84.75% / Branch 83.07% / Funcs 86.66% / Lines 86.19%（着手前 72〜74%）
+  - src/routes/products.js・src/utils/csv.js 100%、public/js/api.js 100%（Branch 95%）、public/js/index.js 95.5%
+- 別ポート（3102）で起動して curl で確認：/・index.html・js・style.css は 200、index.html にアラートカードと CSV出力ボタンあり、/api/products/alerts・/export はトークンなし・不正なトークンで 401。確認後にサーバは停止した
+- 要件・設計との照合：アラート（在庫数 < 閾値、不足数の大きい順）、CSV（一覧と同じ条件、BOM・CRLF・RFC 4180、インジェクション対策、ファイル名・ヘッダー）は設計どおり。設計からの変更点は件数上限（10万件 → 5万件）と、429 / 503 / 監査ログの追加のみ
+- 変更ファイル
+  - src：routes/products.js、utils/csv.js（新規）、utils/httpError.js、middleware/errorHandler.js
+  - public：index.html、js/index.js、js/api.js、style.css
+  - __tests__：utils/csv.test.js・routes/products.alerts-export.test.js・public/api.test.js・public/index.test.js（新規）、middleware/auth.test.js・middleware/errorHandler.test.js・public/helpers/dom.js（変更）
+- 未対応・持ち越し：
+  - 実データでの E2E（ログインしてアラート表示・CSV をダウンロードし Excel で開く）は未実施。admin / password のログインが 401（初期パスワード変更済みと思われる）で、DB を直接見る操作も権限で拒否されたため。利用者のアカウントでの確認が必要
+  - 実機ブラウザでの表示確認（このサーバにブラウザがない）
+  - CSV のストリーミング出力、ユーザ単位のレート制限（express-rate-limit）、/api 全体の Cache-Control: no-store（S9-06）、57014 のログのラベル
+  - 同時実行の制限はプロセス単位（複数台にすると上限は 2×台数）
+  - CSV 出力を一般ユーザにも許可するか（現状は全ログインユーザ。監査ログで追跡は可能）は要件で決める
+- 失敗・気づき：
+  - docs/agent-teams.md の security-architect の担当タスクに「追加機能のバックエンド部分だけ実装」とあったが、backend の記述の写し間違いと判断し、レビューのみの役割とした（security-auditor は Bash・Write を持たない）
+  - test と frontend / backend の修正を並列にしたため、テスト担当が作業中に実装が変わり、期待値を2回合わせ直した。修正ラウンドでは「修正完了 → テスト」の順にするほうが手戻りが少ない
+  - backend 担当が「statement_timeout は未設定」と報告したが、pool.js で既定 5秒が設定済みだった（manager が確認して訂正）
+  - 動作確認用サーバを止める pkill -f のパターンが自分のシェルのコマンドラインにも一致し、シェルが落ちた → サーバは PID 指定で停止。今後は PID を控えて kill する
+
+### STEP9 完了確認の準備（2026-10-09）
+- 実施内容：
+  - 確認用ユーザを登録：test-user（氏名「【テスト】確認用ユーザ」、ロール general、パスワード TestPass2026）。admin のパスワードは変更済みで使えないため、DB に bcrypt ハッシュを直接登録した
+  - サーバを port 3000 で起動（npm start をバックグラウンドで実行）
+  - test-user でログインし、POST /api/products でテスト商品を6件登録（商品名は「【テスト】」で始まる。JAN は店内用の 20 始まり。初期入庫伝票も通常どおり作成される）
+    - 在庫不足：2000000000015（在庫2／閾値20）、2000000000022（5／10）、2000000000046（1／5。CSV のクォート・数式対策の確認用で、名前にカンマ・引用符、規格が =1+1）、2000000000039（0／3）
+    - アラート対象外：2000000000053（10／10＝閾値ちょうど）、2000000000060（100／10）
+  - テストデータは残す（利用者の指示）
+- 検証：
+  - curl http://localhost:3000/api/products/alerts（トークンなし）→ 401（認証必須の仕様どおり）
+  - トークン付き → 200、total 4、不足数の大きい順（18 → 5 → 4 → 3）。閾値ちょうどの商品は含まれない
+  - export → 200、text/csv、BOM・CRLF、カンマ・引用符はクォートされ、=1+1 は '=1+1 で出力。alert=true は4件。監査ログも出力された
+- 決定事項：
+  - 完了確認の例はトークンなしの curl だが、STEP7 で業務 API はすべて認証必須にしているため 401 になる → 利用者の判断で認証は外さず、トークン付きの curl で確認する（コードは変更しない）
+- 失敗・気づき：
+  - STEP7 で業務 API（/api/products・/api/stockinout・/api/usr）をすべてアクセストークン必須に設計したため、追加した /api/products/alerts・/api/products/export もトークンなしでは呼べない（401）
+    - 課題の完了確認の例「curl http://localhost:3000/api/products/alerts」はトークンなしを前提にしており、そのままでは期待どおりの結果にならなかった
+    - 設計時に完了確認の手順（トークンなしの curl）との整合を確認していなかった。認証などの共通方針を決めるときは、完了確認・動作確認の手順への影響も合わせて確認する
+    - 対応：認証は外さず、POST /api/login で取得したトークンを Authorization: Bearer ヘッダーに付けて確認する。手動確認用に test-user のトークンを発行した（1ユーザ1トークンのため、test-user で再ログインすると以前のトークンは無効になる）
+
+### STEP10　フロントエンドのテスト追加（form.js・login.js）（2026-10-09）
+- 背景：npm run test:coverage の完了条件（全テストがグリーン・カバレッジ 70% 以上・追加機能のテストを含む）は STEP9 の時点で満たしていた（704件成功、全体 84.75%）。ただし public/js フォルダ単位の Branch が 67.94%（form.js・login.js が 0%）だったため、テストを追加した
+- 実施内容（test 担当。__tests__/ のみ変更、src/・public/ は変更なし）：
+  - 新規 __tests__/public/form.test.js（60件）：商品登録（送信内容・初期入庫伝票の案内・400 の欄別エラー・409・401・通信エラー・送信中のボタン無効化）、入出庫登録（新規／訂正の切り替え・成功後の一覧と履歴の自動更新・閾値を下回ったときの警告・400 / 404 / 409）、簡易在庫一覧・入出庫履歴、XSS 文字列が文字列のまま表示されること
+  - 新規 __tests__/public/login.test.js（21件）：ログイン成功時のトークン保存と遷移、?next= の許可・拒否（外部 URL・//・/\・javascript: など）、401・500・通信エラー、入力不足、送信中のボタン無効化
+  - __tests__/public/helpers/dom.js に mockNavigation()（location.replace / assign の遷移先を記録）と setUrl() を追加
+  - auth.js・ui.js の未カバーの行も埋めた（画面復帰時の再読み込み、ログアウト、本文なしの 201 など）
+- 検証：
+  - npm run test:coverage → 22 + 2 = 24スイート・785件すべて成功。3回続けて実行して安定していることを確認（manager が再実行して確認）
+  - カバレッジ：全体 Stmts 97.97% / Branch 92.94% / Funcs 98.66% / Lines 99.54%、public/js 96.56% / 86.9% / 97.72% / 99.45%、form.js 98.61%（Branch 98.36%）、login.js 100%、auth.js・ui.js は行カバレッジ 100%
+- 見つかった不具合（同日に修正済み。下記「不具合の修正」参照）：
+  - 【セキュリティ】public/js/login.js の nextPath() のオープンリダイレクト対策を迂回できる
+    - /login.html?next=%2F%09%2Fevil.example.com のように / と / の間にタブ・改行を挟むと、「/ で始まり // で始まらない」チェックを通る。URL の解析時にタブ・改行が除かれるため、遷移先が //evil.example.com（外部サイト）になる（new URL で http://evil.example.com/ になることを manager も確認）
+    - login.test.js に test.failing として記録（現在は外部へ遷移してしまうことを確認するテスト）。修正したら通常の test に戻す
+    - 修正案：new URL(next, location.origin) で解析して origin が同じことを確認し、pathname + search + hash を使う（またはタブ・改行を含む値を拒否する）
+- 仕様の疑問点：
+  - ログイン API が本文なしの 401 を返すと、api.js の既定文言「ログインの有効期限が切れました…」が出る。サーバは常に error を返すため実害は小さい
+- 失敗・気づき：
+  - jsdom では location を差し替えられないため、遷移の確認は jsdom 内部の実装を spyOn する方法をとった（jsdom の版が変わると修正が必要になる可能性あり）
+  - jsdom は type="number" の badInput を再現しないため、該当テストは validity / value を上書きしている
+- 不具合の修正（login.js のオープンリダイレクト）：
+  - [frontend] public/js/login.js の nextPath() を修正
+    - 文字列のチェック（多層防御）：/ で始まる、// や /\ で始まらない、制御文字（\u0000-\u001F・\u007F）を含まない
+    - new URL(next, location.origin) で解析し（例外なら既定値）、オリジンが現在の画面と同じときだけ、解析後の pathname + search + hash を返す（解析前の文字列はそのまま使わない）
+    - 既定の遷移先 /index.html と、既存の許可ケース（/form.html、クエリ付き、# 付き）の挙動は変更なし
+  - [test] __tests__/public/login.test.js（21件 → 30件）
+    - test.failing の2件（タブ・改行）を通常のテストに戻し、/index.html へ遷移することを確認
+    - 拒否ケース：CR・NUL・DEL を挟んだ値、先頭以外・末尾の制御文字。許可ケース：/form.html?x=1#a、/%2F/evil.example.com（同じオリジンのパスのまま）
+    - new URL の例外・オリジン不一致の分岐も URL を spyOn してカバー
+  - [manager] 修正の差分をレビュー（方針どおり）し、npm run test:coverage を再実行 → 24スイート・794件すべて成功、test.failing は残っていない。全体 Stmts 97.98% / Branch 92.98% / Funcs 98.66% / Lines 99.55%、login.js 100%
+  - 静的ファイルのみの変更のため、起動中のサーバ（3000）は再起動なしで反映される
+- format.js のテスト追加：
+  - 背景：利用者が手動で npm run test:coverage を実行したところ、Branch 60% の行があった。結果自体は manager の提示と同じで、端末の幅が狭くファイル名が「...js」に省略されていたため、どのファイルか分からなかった（60% は public/js/format.js の Branch）。完了条件（全体で 70% 以上）は満たしていたが、manager が前回の報告で 60% のファイルに触れていなかった
+  - [test] 新規 __tests__/public/format.test.js（27件）
+    - label()：既知の値（in/out、1/2 と '1'/'2'）、未知の値はそのまま文字列、null/undefined は空文字、プロトタイプのプロパティ名（toString・__proto__・constructor・hasOwnProperty）は対応表の値にならず文字列のまま
+    - formatDelta()：正の数は + と3桁区切り、負の数、0 には + を付けない、数値以外は空文字
+    - stockBadge()：在庫不足／正常のクラスと文言。emptyRow()：1行に置き換わる、colspan・class・XSS 文字列は文字列のまま表示
+  - [manager] npm run test:coverage を再実行 → 25スイート・821件すべて成功。全体 Stmts 98.05% / Branch 93.45% / Funcs 98.66% / Lines 99.55%、public/js Branch 87.91%、format.js 100%。不具合なし
+  - 気づき：カバレッジを報告するときは、全体の値だけでなく 70% を下回るファイルの有無も併せて伝える。端末が狭いとファイル名が省略されるため、確認するときはウィンドウを広げるか横スクロールできる形で表示する
+
+### STEP11　HTTPS 対応（自己署名証明書）（2026-10-09）
+- 背景：デプロイ前の持ち越し事項（STEP6）。helmet の既定の CSP（upgrade-insecure-requests）のため、http 配信では画面の CSS / JS が https に切り替わって読めない見込み。利用者の希望により、自己署名証明書（オレオレ証明書）で HTTPS 配信できるようにした
+- 設計（manager）：
+  - HTTPS_KEY_PATH と HTTPS_CERT_PATH が両方設定されていれば、HTTP（PORT=3000）に加えて HTTPS（HTTPS_PORT、既定 3443）でも待ち受ける
+  - HTTP は従来どおり配信する（リダイレクトしない）。トークンなしの curl など既存の確認手順を壊さないため
+  - HSTS は HSTS_ENABLED=true のときだけ有効（既定は無効）。自己署名証明書では HSTS があるとブラウザが証明書の警告を回避させてくれず、また localhost の全ポートが https に強制されて http://localhost:3000 も使えなくなるため。正規の証明書にしたら有効にする
+- 実施内容：
+  - [backend] src/index.js：HTTPS サーバの起動（相対パスはプロジェクトルート基準）。設定が片方だけ・ファイルが読めない・HTTPS_PORT が不正または PORT と同じ・鍵や証明書の形式が不正・HTTPS ポートで待ち受けできない場合は、理由（パスとエラーコードのみ。鍵の中身は出さない）を出して exit(1)。停止時は HTTP・HTTPS の両方を閉じてから DB プールを閉じる
+  - [backend] src/app.js：helmet の HSTS を HSTS_ENABLED で切り替え（CSP などほかの設定は変更なし）。.env.example に4項目を説明付きで追記
+  - [manager] 証明書を作成：openssl で RSA 2048bit・SHA-256・有効期限 365日（2027-10-09 まで）。CN=localhost、SAN は localhost / 127.0.0.1 / ip-172-31-0-30 / 172.31.0.30。certs/server.key（権限 600）と certs/server.crt に保存し、.gitignore に certs/ を追加（秘密鍵をコミットしない）
+  - [manager] .env に HTTPS_KEY_PATH=certs/server.key、HTTPS_CERT_PATH=certs/server.crt、HTTPS_PORT=3443、HSTS_ENABLED=false を追記し、サーバを再起動
+  - [test] __tests__/index.test.js（+24件）、__tests__/app.test.js（+4件）。fs.readFileSync と https.createServer をモックし、起動・パスの解決・起動失敗の各ケース・鍵の中身がログに出ないこと・停止の順序・HSTS の切り替えを確認
+- 検証：
+  - npm run test:coverage → 25スイート・849件すべて成功（3回続けて安定）。全体 Stmts 98.11% / Branch 93.69% / Funcs 98.71% / Lines 99.56%、src/index.js・src/app.js 100%
+  - 起動ログに http://localhost:3000 と https://localhost:3443 の2行が出ることを確認
+  - curl --cacert certs/server.crt https://localhost:3443/ → 200（証明書の検証も成功）。CA を指定しないと証明書エラーになる（自己署名のため想定どおり）
+  - HTTPS の応答に CSP があり、Strict-Transport-Security はない
+  - HTTPS で index.html・login.html・style.css・js が 200。API はトークンなしで 401、トークン付きで alerts 200（total 4）・export 200（text/csv）。HTTP（3000）も引き続き動作
+- 決定事項・気づき：
+  - backend 担当の報告では「鍵や証明書の形式の不正も待ち受け前に判定する」とあったが、実際は https.createServer が HTTP の待ち受け開始後に呼ばれる。そのため形式が不正なときは HTTP が一瞬起動してから exit(1) になる（起動失敗は明示されるので許容。HTTPS ポートが使用中の場合も同様）
+  - 確認中に、STEP9 で渡した test-user のトークンが 401 になっていた（その後 test-user で再ログインしたため上書きされたと思われる）。確認のためログインし直し、新しいトークンを発行した
+- 未対応・持ち越し：
+  - HTTP（3000）が平文のまま使えるため、ログインのパスワードやトークンも http で送れてしまう → 同日、HTTPS へのリダイレクトを追加（下記）
+  - 自己署名証明書のため、ブラウザでは警告が出る（「詳細設定」から進む必要がある）。正規の証明書（Let's Encrypt など。ドメインが必要）にしたら HSTS_ENABLED=true にする
+  - EC2 のセキュリティグループで 3443 を開けるか、外部からアクセスするなら証明書の SAN にパブリック IP / ドメインを追加して作り直す
+  - サーバはまだ nohup でのバックグラウンド起動。サーバの再起動で止まるため、本番では systemd などでサービス化する
+- HTTP → HTTPS リダイレクトの追加（利用者の依頼）：
+  - 設計（manager）：
+    - HTTPS が有効かつ HTTPS_REDIRECT が false でないとき（既定は有効）、HTTP（3000）では画面・API を配信せず、308 で https://<ホスト>:<HTTPS_PORT><元のパスとクエリ> へ転送する
+    - 308 にしたのは、メソッドと本文を保ったまま転送するため（POST /api/login なども同じメソッドで送り直される）
+    - 転送先のホスト名は Host ヘッダーをそのまま使わず、許可リスト HTTPS_REDIRECT_HOSTS（既定 localhost,127.0.0.1）にある場合だけ使う。ない場合はリストの先頭（Host ヘッダーの偽装による外部サイトへの転送を防ぐ）
+  - [backend] 新規 src/utils/httpsRedirect.js（許可リストの解析・Host の解析・Location の組み立て・リダイレクト用ハンドラ）、src/index.js、.env.example
+    - / で始まらないパスや、ヘッダーに書けない文字を含むパスは / へ転送する
+    - 許可リストの値が不正、または HTTP のポートで待ち受けできない場合は起動失敗（exit 1）
+    - 308 はブラウザにキャッシュされることがあるため Cache-Control: no-store を付けた（HTTPS を無効に戻したときに http://localhost:3000 が使えなくなるのを防ぐ）
+  - [manager] .env に HTTPS_REDIRECT=true、HTTPS_REDIRECT_HOSTS=localhost,127.0.0.1,ip-172-31-0-30,172.31.0.30（証明書の SAN と同じ）を追記してサーバを再起動。起動ログに「http://localhost:3000 → https へリダイレクトします」が出る
+  - [test] __tests__/index.test.js（29件 → 47件。http をモックして実ポートを開かないようにした）、新規 __tests__/utils/httpsRedirect.test.js（66件）
+  - 検証：
+    - npm run test:coverage → 26スイート・933件すべて成功（3回続けて安定）。全体 Stmts 98.16% / Branch 93.98% / Funcs 98.77% / Lines 99.57%、src/index.js・src/utils/httpsRedirect.js 100%
+    - curl：http://localhost:3000/ → 308 https://localhost:3443/、/api/products/alerts も 308、クエリは保持、POST /api/login も 308、内部 IP 172.31.0.30 はそのホストのまま転送、偽の Host（evil.example.com）は https://localhost:3443 へ。HTTPS は従来どおり 200
+  - 決定事項・気づき：
+    - 完了確認の例 curl http://localhost:3000/api/products/alerts は、今後は 308 が返る（-L を付けても下記の理由で 401）。API は https://localhost:3443 を直接呼ぶ（curl --cacert certs/server.crt または -k）
+    - curl -L は、別のポート（オリジン）へ転送されるときに Authorization ヘッダーを送らない（curl の安全のための仕様）。そのため http からトークン付きで呼ぶと転送先で 401 になる。--location-trusted を付ければ送られるが、通常は https を直接呼ぶ
+    - test 担当が http をモックする前に index.test.js を1回実行し、実ポート 3000 で待ち受けようとした（起動中のサーバがあったため EADDRINUSE で失敗）。manager が確認し、起動中のサーバ（同じ PID）は影響なく動いていた。以降はモック済み
+    - 外部からドメイン名やパブリック IP でアクセスする場合は、HTTPS_REDIRECT_HOSTS に追加しないと localhost へ転送されてしまう
+- HTTPS 対応の取り消し（利用者の判断で、HTTPS は使わないことにした）：
+  - [manager] STEP11 のソースを STEP9 着手前に取ったバックアップ（scratchpad。HTTPS 以外の差分がないことを確認済み）から戻した
+    - 元に戻した：src/index.js、src/app.js（helmet() を既定に戻したため、HSTS ヘッダーは従来どおり付く）、.env.example、__tests__/index.test.js、__tests__/app.test.js
+    - 削除した：src/utils/httpsRedirect.js、__tests__/utils/httpsRedirect.test.js
+    - .env から HTTPS_* / HSTS_ENABLED の行を削除し、サーバを HTTP のみで再起動
+  - 残しているもの：certs/（自己署名証明書と秘密鍵。不要なら削除してよい）と .gitignore の certs/ の行（秘密鍵を誤ってコミットしないため）
+  - 検証：npm run test:coverage → 25スイート・821件すべて成功（STEP10 の format.js 追加後と同じ件数とカバレッジ。全体 Stmts 98.05%）。http://localhost:3000/ は 200、alerts はトークンなしで 401・トークン付きで 200（total 4）、起動ログは http のみ
+  - 持ち越し（STEP6 から変わらず）：helmet の既定の CSP の upgrade-insecure-requests により、http 配信ではブラウザによって CSS / JS が https に切り替わり、読めない可能性がある。ブラウザでの表示を確認し、問題があればこのディレクティブだけ外すことを検討する
+  - 気づき：Git 管理していないため、作業前のバックアップがなければ元に戻せなかった。git init して STEP ごとにコミットしておけば、取り消しが確実で簡単になる

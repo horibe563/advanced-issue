@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>在庫状況 | 在庫管理</title>
+  <link rel="stylesheet" href="/style.css">
+  <!-- helmet の CSP（script-src 'self'）に合わせ、スクリプトは外部ファイルのみ読み込む -->
+  <script type="module" src="/js/index.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <p class="site-title">在庫管理</p>
+    <nav aria-label="メインメニュー">
+      <ul class="nav-list">
+        <li><a href="/index.html" aria-current="page">在庫状況</a></li>
+        <li><a href="/form.html">商品登録・入出庫登録</a></li>
+      </ul>
+    </nav>
+    <!-- ログインユーザ名・ログアウト（js/auth.js が表示する） -->
+    <div id="header-user" class="header-user" hidden></div>
+  </header>
+
+  <main class="container">
+    <h1>在庫状況</h1>
+
+    <!-- 操作結果・エラーの表示領域 -->
+    <div id="page-message" class="message" hidden></div>
+
+    <!-- 在庫アラート（在庫数 < 閾値 の商品を不足数の大きい順に表示する） -->
+    <section class="card card-alert" id="alert-section" aria-labelledby="alert-heading">
+      <h2 id="alert-heading">在庫アラート</h2>
+      <!-- アラートの読み込みエラーはこのカード内に表示する（一覧の表示は妨げない） -->
+      <div id="alert-message" class="message" hidden></div>
+      <p id="alert-summary" class="summary alert-summary" aria-live="polite">読み込み中…</p>
+      <div id="alert-table-wrap" class="table-wrap" hidden>
+        <table class="data-table" id="alert-table">
+          <thead>
+            <tr>
+              <th scope="col">JAN</th>
+              <th scope="col">商品名</th>
+              <th scope="col">規格</th>
+              <th scope="col" class="num">在庫数</th>
+              <th scope="col" class="num">閾値</th>
+              <th scope="col" class="num">不足数</th>
+            </tr>
+          </thead>
+          <tbody id="alert-body"></tbody>
+        </table>
+      </div>
+      <p id="alert-more" class="summary alert-more" hidden></p>
+    </section>
+
+    <section class="card" aria-labelledby="search-heading">
+      <h2 id="search-heading">検索</h2>
+      <form id="search-form" class="search-form" novalidate>
+        <div class="field">
+          <label for="search-product-name">商品名（部分一致）</label>
+          <input type="search" id="search-product-name" name="product_name" maxlength="200" autocomplete="off">
+          <div class="field-error" data-error-for="product_name" hidden></div>
+        </div>
+        <div class="field">
+          <label for="search-product-name-kana">商品名カナ（部分一致）</label>
+          <input type="search" id="search-product-name-kana" name="product_name_kana" maxlength="200" autocomplete="off">
+          <div class="field-error" data-error-for="product_name_kana" hidden></div>
+        </div>
+        <div class="field field-checkbox">
+          <input type="checkbox" id="search-alert-only" name="alert">
+          <label for="search-alert-only">在庫不足（アラート）の商品のみ表示</label>
+        </div>
+        <div class="actions">
+          <button type="submit" id="search-button" class="btn btn-primary">検索</button>
+          <button type="button" id="search-clear" class="btn">条件をクリア</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card" aria-labelledby="list-heading">
+      <div class="section-header">
+        <h2 id="list-heading">商品一覧</h2>
+        <div class="section-tools">
+          <button type="button" id="reload-button" class="btn btn-small">再読み込み</button>
+          <button type="button" id="export-button" class="btn btn-small">CSV出力</button>
+          <a href="/form.html" class="btn btn-small btn-primary">商品を登録する</a>
+        </div>
+      </div>
+      <p id="list-summary" class="summary" aria-live="polite"></p>
+      <div class="table-wrap">
+        <table class="data-table" id="product-table">
+          <thead>
+            <tr>
+              <th scope="col">状態</th>
+              <th scope="col">JAN</th>
+              <th scope="col">商品名</th>
+              <th scope="col">規格</th>
+              <th scope="col" class="num">在庫数</th>
+              <th scope="col" class="num">閾値</th>
+              <th scope="col">操作</th>
+            </tr>
+          </thead>
+          <tbody id="product-body"></tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <button type="button" id="prev-page" class="btn btn-small" disabled>前の100件</button>
+        <span id="page-info"></span>
+        <button type="button" id="next-page" class="btn btn-small" disabled>次の100件</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- 入出庫履歴の子画面（表示のみ） -->
+  <dialog id="history-dialog" class="dialog" aria-labelledby="history-title">
+    <!-- 背景クリックで閉じる判定のため、内容は内側の要素に入れる（dialog 自体には余白を持たせない） -->
+    <div class="dialog-body">
+    <div class="dialog-header">
+      <h2 id="history-title">入出庫履歴</h2>
+      <button type="button" class="btn btn-small" id="history-close">閉じる</button>
+    </div>
+    <p id="history-product" class="summary"></p>
+    <div id="history-message" class="message" hidden></div>
+    <p id="history-summary" class="summary" aria-live="polite"></p>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th scope="col">日付</th>
+            <th scope="col">種別</th>
+            <th scope="col">伝票NO</th>
+            <th scope="col" class="num">SEQ</th>
+            <th scope="col">伝票フラグ</th>
+            <th scope="col" class="num">数量</th>
+            <th scope="col" class="num">在庫への影響</th>
+            <th scope="col">登録者</th>
+          </tr>
+        </thead>
+        <tbody id="history-body"></tbody>
+      </table>
+    </div>
+    </div>
+  </dialog>
+</body>
+</html>

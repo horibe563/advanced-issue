@@ -1,0 +1,28 @@
+{
+  "name": "inventory-app",
+  "version": "1.0.0",
+  "description": "商社向け社内在庫管理アプリ",
+  "main": "src/index.js",
+  "private": true,
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test": "jest",
+    "test:coverage": "jest --coverage",
+    "test:ci": "jest --coverage --ci"
+  },
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "dotenv": "^17.4.2",
+    "express": "^4.22.3",
+    "helmet": "^8.3.0",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@babel/plugin-transform-modules-commonjs": "^7.29.7",
+    "jest": "^30.5.2",
+    "jest-environment-jsdom": "^30.5.2",
+    "nodemon": "^3.1.14",
+    "supertest": "^7.3.1"
+  }
+}
